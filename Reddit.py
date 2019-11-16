@@ -6,11 +6,15 @@ This is a temporary script file.
 """
 
 import pandas as pd
+import numpy as np
 from pandas import DataFrame
 from sklearn.cluster import KMeans
 import matplotlib.pyplot as plt
 from sklearn.metrics.pairwise import euclidean_distances
 from sklearn.decomposition import PCA
+from sklearn.decomposition import FactorAnalysis
+from sklearn.manifold import TSNE
+from sklearn.decomposition import LatentDirichletAllocation
 
 title = DataFrame.from_csv("Reddit_Title.tsv", sep="\t")
 
@@ -122,11 +126,11 @@ title['TIMESTAMP'] = pd.to_datetime(title['TIMESTAMP'])
 del properties_df
 
 title['POST_ID'] = title['POST_ID'].str[:6]
-title['YEAR'] = title.TIMESTAMP.astype(str).str[:4].astype(int)
-title['MONTH'] = title.TIMESTAMP.astype(str).str[5:7].astype(int)
-title['DAY'] = title.TIMESTAMP.astype(str).str[8:10].astype(int)
-title['DAYOFWEEK'] = title.TIMESTAMP.dt.dayofweek.astype(int)
-title['HOUR'] = title.TIMESTAMP.astype(str).str[11:13].astype(int)
+title['YEAR'] = title.TIMESTAMP.astype(str).str[:4]
+title['MONTH'] = title.TIMESTAMP.astype(str).str[5:7]
+title['DAY'] = title.TIMESTAMP.astype(str).str[8:10]
+title['DAYOFWEEK'] = title.TIMESTAMP.dt.dayofweek.astype(str)
+title['HOUR'] = title.TIMESTAMP.astype(str).str[11:13]
 
 ### Dataset Summaries
 summary = title.describe().T
@@ -134,30 +138,57 @@ summary_noconflicts = title[title.LINK_SENTIMENT == 1].describe().T
 summary_conflicts = title[title.LINK_SENTIMENT != 1].describe().T
 
 ### Variable Standardization
+title = title.reset_index()
 
+features = [x for x in numerical_cols if x != 'LINK_SENTIMENT']
+cat_features = ['MONTH','HOUR','DAYOFWEEK','DAY']
+cat_features_df = pd.get_dummies(title[cat_features])
 
+title = title.join(cat_features_df)
 
-### Initial clusters
-idvs = ['LINK_SENTIMENT','Num_words','Frac_alphabet','Frac_digits','Frac_special','Avg_wordlength',
-        'Readability_index','Compound_sentiment','LIWC_Funct','LIWC_Negate','LIWC_Swear','LIWC_Social',
-        'LIWC_Affect','LIWC_CogMech','LIWC_Percept','LIWC_Bio','LIWC_Relativ','LIWC_Money','DAYOFWEEK','HOUR']
+#features = features + cat_features_df.columns.tolist()
 
-kmeans = KMeans(n_clusters=10, random_state=0, n_jobs=-1).fit(title[idvs])
+for f in features:
+    #Standardization
+    title[f] = (title[f] - title[f].min())/(title[f].max() - title[f].min())
+    #Normalization
+    #title[f] = (title[f] - title[f].mean())/np.std(title[f])
 
-title['Initial_Clusters'] = kmeans.labels_
+# =============================================================================
+# ### Initial clusters
+# idvs = ['LINK_SENTIMENT','Num_words','Frac_alphabet','Frac_digits','Frac_special','Avg_wordlength',
+#         'Readability_index','Compound_sentiment','LIWC_Funct','LIWC_Negate','LIWC_Swear','LIWC_Social',
+#         'LIWC_Affect','LIWC_CogMech','LIWC_Percept','LIWC_Bio','LIWC_Relativ','LIWC_Money','DAYOFWEEK','HOUR']
+# 
+# kmeans = KMeans(n_clusters=10, random_state=0, n_jobs=-1).fit(title[idvs])
+# 
+# title['Initial_Clusters'] = kmeans.labels_
+# 
+# cluster_characteristics = pd.DataFrame(kmeans.cluster_centers_)
+# cluster_characteristics = cluster_characteristics.join(title.Initial_Clusters.value_counts())
+# cluster_characteristics.columns = idvs + ['Row_Count']
+# =============================================================================
 
-cluster_characteristics = pd.DataFrame(kmeans.cluster_centers_)
-cluster_characteristics = cluster_characteristics.join(title.Initial_Clusters.value_counts())
-cluster_characteristics.columns = idvs + ['Row_Count']
+### PCA
+pca = PCA(n_components=len(features), random_state=0).fit(title[features])
+pca_components = pd.DataFrame(pca.components_.T*np.sqrt(pca.explained_variance_)).T
+pca_components.columns = features
+pca_components = pca_components.T
+eigenValues = pca.explained_variance_ratio_
 
-### Clusters on data with features from PCA
-pca = PCA(n_components=2, random_state=0).fit(title[idvs])
-pca_components = pd.DataFrame(pca.components_)
-pca_components.columns = idvs
+#pca_features = pd.DataFrame(pca.fit_transform(title[features]))
 
-pca_features = pd.DataFrame(pca.fit_transform(title[idvs]))
-pca_features.columns = ['PC1','PC2']
+### Factor Analysis
+fa = FactorAnalysis(n_components=len(features), random_state=0).fit(title[features])
+fa_components = pd.DataFrame(fa.components_)
+fa_components.columns = features
+fa_components = fa_components.T
 
+### TSNE
+tsne = TSNE(n_components=3, random_state=0).fit(title[features])
 
+### LDA
 
+lda = LatentDirichletAllocation(n_components=10, random_state=0, n_jobs=-1).fit(title[features[21:]])
+lda_fit_transform = lda.fit_transform(title[features[21:]])
 
