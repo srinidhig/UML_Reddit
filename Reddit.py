@@ -13,8 +13,21 @@ import matplotlib.pyplot as plt
 from sklearn.metrics.pairwise import euclidean_distances
 from sklearn.decomposition import PCA
 from sklearn.decomposition import FactorAnalysis
+from sklearn.decomposition import TruncatedSVD
+from sklearn.utils.extmath import randomized_svd
 from sklearn.manifold import TSNE
 from sklearn.decomposition import LatentDirichletAllocation
+from sklearn.cluster import KMeans
+from sklearn.cluster import SpectralClustering
+from sklearn.mixture import GaussianMixture
+from sklearn.cluster import AgglomerativeClustering
+from scipy.cluster.hierarchy import dendrogram, linkage
+from sklearn.metrics import silhouette_score
+from sklearn.metrics import davies_bouldin_score
+
+def cluster_scores(feature_name):
+    print(silhouette_score(title[f_features], title[feature_name], random_state=0, metric='euclidean'))
+    print(davies_bouldin_score(title[f_features],title[feature_name]))
 
 title = DataFrame.from_csv("Reddit_Title.tsv", sep="\t")
 
@@ -146,6 +159,10 @@ cat_features_df = pd.get_dummies(title[cat_features])
 
 title = title.join(cat_features_df)
 
+### ONLY FOR SAMPLING
+title = title.sample(10000)
+title = title.reset_index()
+
 #features = features + cat_features_df.columns.tolist()
 
 for f in features:
@@ -187,8 +204,102 @@ fa_components = fa_components.T
 ### TSNE
 tsne = TSNE(n_components=3, random_state=0).fit(title[features])
 
-### LDA
+### Final Features - RUN FROM HERE
+title['LIWC_Neg_New'] = title[['LIWC_Negemo',
+'LIWC_Anx',
+'LIWC_Anger',
+'LIWC_Sad']].mean(axis = 1)
+f_features = ['LIWC_Swear','LIWC_Social','LIWC_Neg_New','LIWC_Posemo','LIWC_Percept',
+              'LIWC_Bio','LIWC_Relativ','LIWC_Work','LIWC_Achiev','LIWC_Leisure',
+              'LIWC_Home','LIWC_Money','LIWC_Relig','LIWC_Death']
 
-lda = LatentDirichletAllocation(n_components=10, random_state=0, n_jobs=-1).fit(title[features[21:]])
-lda_fit_transform = lda.fit_transform(title[features[21:]])
+### Getting number of features to use - Initially used all 14 components, took only those explaining > 90% data
+pca2 = PCA(n_components= len(f_features), random_state=0).fit(title[f_features])
+pca2_components = pd.DataFrame(pca2.components_.T*np.sqrt(pca2.explained_variance_)).T
+pca2_components.columns = f_features
+pca2_components = pca2_components.T
+eigenValues = pca2.explained_variance_ratio_
+
+pca_transformed_features = pd.DataFrame(pca2.fit_transform(title[f_features]))
+pca_transformed_features.columns = ['PC_' + str(i + 1) for i in range(len(f_features))]
+
+### CHANGE THIS IF DATA IS SAMPLED
+pc_to_remove = ['PC_12','PC_13','PC_14']
+pca_transformed_features = pca_transformed_features.drop(pc_to_remove, axis = 1)
+
+title = title.join(pca_transformed_features)
+
+f_features = pca_transformed_features.columns.tolist()
+del pca_transformed_features
+
+### LDA - finding optimal number of components
+'''
+perp2 = []
+for i in [1,2,3,4,5,6,7,8,9,10,15,20,25,30,50,100]:
+    lda = LatentDirichletAllocation(n_components=i, random_state=0, n_jobs=-1).fit(title[f_features])
+    x = lda.perplexity(title[f_features])
+    print(x)
+    perp2.append(x)
+    print(i)
+'''
+    
+lda = LatentDirichletAllocation(n_components=10, random_state=0, n_jobs=-1).fit(title[f_features])
+lda_fit_transform = lda.fit_transform(title[f_features])
+
+### k-means - # Optimal Clusters = 7 (SSE Threshold = 11,000)
+sse = {}
+for k in range(1, 10):
+    kmeans = KMeans(n_clusters=k, max_iter=1000, random_state=0, n_jobs=-1, init = 'k-means++').fit(title[f_features])
+    title["kmeans_clusters_"+str(k)] = kmeans.labels_
+    sse[k] = kmeans.inertia_
+plt.figure()
+plt.plot(list(sse.keys()), list(sse.values()))
+plt.xlabel("Number of cluster")
+plt.ylabel("SSE")
+plt.show()
+
+kmeans_final = KMeans(n_clusters=7, max_iter=1000, random_state=0, n_jobs=-1, init = 'k-means++').fit(title[f_features])
+
+dict_cluster_results = {}
+for c in title['kmeans_clusters_7'].unique().tolist():
+    dict_cluster_results[c] = title[title['kmeans_clusters_7'] == c][f_features].describe().T
+
+### Evaluating k-means
+cluster_scores('kmeans_clusters_7')
+
+### SPECTRAL CLUSTERING - ONLY ON SAMPLED DATA
+sc = SpectralClustering(n_jobs=-1, random_state=0).fit(title[f_features])
+title['sc_clusters'] = sc.labels_
+cluster_scores('sc_clusters')
+
+### GMM
+
+gmm = GaussianMixture(n_components = 7,covariance_type = 'spherical',random_state= 0).fit(title[f_features])
+gmm_pred_proba = pd.DataFrame(gmm.predict_proba(title[f_features]))
+title['gmm_clusters'] = gmm.predict(title[f_features])
+
+### 2nd best clusters
+#title.loc[title['gmm_clusters'] == 2,'gmm_clusters_2'] = 5
+#title.loc[title['gmm_clusters'] == 5,'gmm_clusters_2'] = 2
+#title.loc[title['gmm_clusters_2'].isnull(),'gmm_clusters_2'] = title['gmm_clusters']
+
+cluster_scores('gmm_clusters')
+
+### Hierarchical Clustering
+
+for i in [2,3,4,5,6,7,8,9,10]:
+    hac = AgglomerativeClustering(n_clusters=i, affinity='euclidean', linkage='average').fit(title[f_features])
+    title['hac_clusters'] = hac.labels_
+    print(i)
+    cluster_scores('hac_clusters')
+    print('\n')
+
+# DENDROGRAM
+linked = linkage(title[f_features],'average')
+labelList = range(title.shape[0])
+
+plt.figure(figsize=(10,7))
+dendrogram(linked, orientation = 'top', labels = labelList, distance_sort='descending',
+           show_leaf_counts=True)
+plt.show()
 
