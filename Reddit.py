@@ -25,9 +25,9 @@ from scipy.cluster.hierarchy import dendrogram, linkage
 from sklearn.metrics import silhouette_score
 from sklearn.metrics import davies_bouldin_score
 
-def cluster_scores(feature_name):
-    print(silhouette_score(title[f_features], title[feature_name], random_state=0, metric='euclidean'))
-    print(davies_bouldin_score(title[f_features],title[feature_name]))
+def cluster_scores(df,feature_name):
+    print(silhouette_score(df[f_features], df[feature_name], random_state=0, metric='euclidean'))
+    print(davies_bouldin_score(df[f_features],df[feature_name]))
 
 title = DataFrame.from_csv("Reddit_Title.tsv", sep="\t")
 
@@ -145,6 +145,16 @@ title['DAY'] = title.TIMESTAMP.astype(str).str[8:10]
 title['DAYOFWEEK'] = title.TIMESTAMP.dt.dayofweek.astype(str)
 title['HOUR'] = title.TIMESTAMP.astype(str).str[11:13]
 
+### Final Features - RUN FROM HERE
+title['LIWC_Neg_New'] = title[['LIWC_Negemo',
+'LIWC_Anx',
+'LIWC_Anger',
+'LIWC_Sad']].mean(axis = 1)
+f_features = ['LIWC_Swear','LIWC_Social','LIWC_Neg_New','LIWC_Posemo','LIWC_Percept',
+              'LIWC_Bio','LIWC_Relativ','LIWC_Work','LIWC_Achiev','LIWC_Leisure',
+              'LIWC_Home','LIWC_Money','LIWC_Relig','LIWC_Death']
+
+
 ### Dataset Summaries
 summary = title.describe().T
 summary_noconflicts = title[title.LINK_SENTIMENT == 1].describe().T
@@ -159,17 +169,44 @@ cat_features_df = pd.get_dummies(title[cat_features])
 
 title = title.join(cat_features_df)
 
-### ONLY FOR SAMPLING
-title = title.sample(10000)
-title = title.reset_index()
-
-#features = features + cat_features_df.columns.tolist()
-
 for f in features:
     #Standardization
     title[f] = (title[f] - title[f].min())/(title[f].max() - title[f].min())
     #Normalization
     #title[f] = (title[f] - title[f].mean())/np.std(title[f])
+
+### ONLY FOR SAMPLING
+#title = title.sample(10000)
+title_all = pd.DataFrame()
+for th in [.99]: # .95,.9,.85 - other thresholds to test
+    title_sw = title[(title.LIWC_Swear >= title.LIWC_Swear.quantile(th))&
+                  (title.LIWC_Neg_New >= title.LIWC_Neg_New.quantile(th))|
+                  (title.LIWC_Swear >= title.LIWC_Swear.quantile(th))&
+                  (title.LIWC_Bio >= title.LIWC_Bio.quantile(th))]
+    print(th)
+    print('title_sw shape:' + str(title_sw.shape))
+    for col in ['LIWC_Social','LIWC_Posemo','LIWC_Percept','LIWC_Relativ',
+'LIWC_Work','LIWC_Achiev','LIWC_Leisure','LIWC_Money','LIWC_Relig','LIWC_Death','LIWC_Home']:
+        if (col in ['LIWC_Relig','LIWC_Death','LIWC_Home'])&(th < 0.97):
+            th = 0.97
+        else:
+            pass
+        title_oth = title[title[col] >= title[col].quantile(th)]
+        print(col + ' shape: ' + str(title_oth.shape))
+        title_all = title_all.append(title_oth)
+    title_all = title_all.append(title_sw)
+    title_all = title_all.drop_duplicates()
+    print('final title shape: ' + str(title_all.shape))
+    print('\n')
+
+title = title_all.copy()
+del [title_oth, title_sw, title_all, cat_features_df]
+
+title = title.reset_index()
+
+#features = features + cat_features_df.columns.tolist()
+
+
 
 # =============================================================================
 # ### Initial clusters
@@ -204,15 +241,6 @@ fa_components = fa_components.T
 ### TSNE
 tsne = TSNE(n_components=3, random_state=0).fit(title[features])
 
-### Final Features - RUN FROM HERE
-title['LIWC_Neg_New'] = title[['LIWC_Negemo',
-'LIWC_Anx',
-'LIWC_Anger',
-'LIWC_Sad']].mean(axis = 1)
-f_features = ['LIWC_Swear','LIWC_Social','LIWC_Neg_New','LIWC_Posemo','LIWC_Percept',
-              'LIWC_Bio','LIWC_Relativ','LIWC_Work','LIWC_Achiev','LIWC_Leisure',
-              'LIWC_Home','LIWC_Money','LIWC_Relig','LIWC_Death']
-
 ### Getting number of features to use - Initially used all 14 components, took only those explaining > 90% data
 pca2 = PCA(n_components= len(f_features), random_state=0).fit(title[f_features])
 pca2_components = pd.DataFrame(pca2.components_.T*np.sqrt(pca2.explained_variance_)).T
@@ -224,7 +252,7 @@ pca_transformed_features = pd.DataFrame(pca2.fit_transform(title[f_features]))
 pca_transformed_features.columns = ['PC_' + str(i + 1) for i in range(len(f_features))]
 
 ### CHANGE THIS IF DATA IS SAMPLED
-pc_to_remove = ['PC_12','PC_13','PC_14']
+pc_to_remove = ['PC_13','PC_14']
 pca_transformed_features = pca_transformed_features.drop(pc_to_remove, axis = 1)
 
 title = title.join(pca_transformed_features)
@@ -258,23 +286,25 @@ plt.xlabel("Number of cluster")
 plt.ylabel("SSE")
 plt.show()
 
-kmeans_final = KMeans(n_clusters=7, max_iter=1000, random_state=0, n_jobs=-1, init = 'k-means++').fit(title[f_features])
+num_clusters = 6
+### Initial Clustering with full dataset = 7, after reducing rows based on quantiles = 6
+kmeans_final = KMeans(n_clusters=num_clusters, max_iter=1000, random_state=0, n_jobs=-1, init = 'k-means++').fit(title[f_features])
 
 dict_cluster_results = {}
-for c in title['kmeans_clusters_7'].unique().tolist():
-    dict_cluster_results[c] = title[title['kmeans_clusters_7'] == c][f_features].describe().T
+for c in title['kmeans_clusters_'+str(num_clusters)].unique().tolist():
+    dict_cluster_results[c] = title[title['kmeans_clusters_'+str(num_clusters)] == c][f_features].describe().T
 
 ### Evaluating k-means
-cluster_scores('kmeans_clusters_7')
+cluster_scores(title,'kmeans_clusters_'+str(num_clusters))
 
 ### SPECTRAL CLUSTERING - ONLY ON SAMPLED DATA
-sc = SpectralClustering(n_jobs=-1, random_state=0).fit(title[f_features])
-title['sc_clusters'] = sc.labels_
-cluster_scores('sc_clusters')
+title_sample = title.sample(10000, random_state = 3)
+sc = SpectralClustering(n_jobs=-1, random_state=0).fit(title_sample[f_features])
+title_sample['sc_clusters'] = sc.labels_
+cluster_scores(title_sample,'sc_clusters')
 
 ### GMM
-
-gmm = GaussianMixture(n_components = 7,covariance_type = 'spherical',random_state= 0).fit(title[f_features])
+gmm = GaussianMixture(n_components = num_clusters, covariance_type = 'spherical',random_state= 0).fit(title[f_features])
 gmm_pred_proba = pd.DataFrame(gmm.predict_proba(title[f_features]))
 title['gmm_clusters'] = gmm.predict(title[f_features])
 
@@ -283,23 +313,34 @@ title['gmm_clusters'] = gmm.predict(title[f_features])
 #title.loc[title['gmm_clusters'] == 5,'gmm_clusters_2'] = 2
 #title.loc[title['gmm_clusters_2'].isnull(),'gmm_clusters_2'] = title['gmm_clusters']
 
-cluster_scores('gmm_clusters')
+cluster_scores(title,'gmm_clusters')
 
 ### Hierarchical Clustering
 
 for i in [2,3,4,5,6,7,8,9,10]:
-    hac = AgglomerativeClustering(n_clusters=i, affinity='euclidean', linkage='average').fit(title[f_features])
-    title['hac_clusters'] = hac.labels_
+    hac = AgglomerativeClustering(n_clusters=i, affinity='euclidean', linkage='average').fit(title_sample[f_features])
+    title_sample['hac_clusters'] = hac.labels_
     print(i)
-    cluster_scores('hac_clusters')
+    cluster_scores(title_sample,'hac_clusters')
     print('\n')
 
 # DENDROGRAM
-linked = linkage(title[f_features],'average')
-labelList = range(title.shape[0])
+linked = linkage(title_sample[f_features],'average')
+labelList = range(title_sample.shape[0])
 
 plt.figure(figsize=(10,7))
 dendrogram(linked, orientation = 'top', labels = labelList, distance_sort='descending',
            show_leaf_counts=True)
 plt.show()
+
+hac = AgglomerativeClustering(n_clusters=5, affinity='euclidean', linkage='average').fit(title_sample[f_features])
+title_sample['hac_clusters'] = hac.labels_
+
+dict_hac_results = {}
+for c in title_sample['hac_clusters'].unique().tolist():
+    dict_hac_results[c] = title_sample[title_sample['hac_clusters'] == c][f_features].describe().T
+
+
+
+
 
