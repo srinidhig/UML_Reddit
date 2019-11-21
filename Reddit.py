@@ -24,6 +24,7 @@ from sklearn.cluster import AgglomerativeClustering
 from scipy.cluster.hierarchy import dendrogram, linkage
 from sklearn.metrics import silhouette_score
 from sklearn.metrics import davies_bouldin_score
+import joblib
 
 def cluster_scores(df,feature_name):
     print(silhouette_score(df[f_features], df[feature_name], random_state=0, metric='euclidean'))
@@ -39,6 +40,9 @@ target_sr['SOURCE_SUBREDDIT'] = target_sr['TARGET_SUBREDDIT']
 target_sr['TARGET_SUBREDDIT'] = '-'
 title = title.append(target_sr)
 del target_sr
+
+sr_once = title.SOURCE_SUBREDDIT.value_counts()[title.SOURCE_SUBREDDIT.value_counts() == 1].index.tolist()
+title = title[title.SOURCE_SUBREDDIT.isin(sr_once)]
 
 properties_df = title.PROPERTIES.str.split(',', expand = True)
 properties_df.columns = ['Num_char',
@@ -160,6 +164,29 @@ summary = title.describe().T
 summary_noconflicts = title[title.LINK_SENTIMENT == 1].describe().T
 summary_conflicts = title[title.LINK_SENTIMENT != 1].describe().T
 
+### Points that have been labelled
+
+labelled_pts = ['djiosmo',
+'fakeid2',
+'openelec',
+'teamearth',
+'moviefunfacts',
+'ajestuncon',
+'shin',
+'plazaaragon',
+'dogestarter',
+'letsdub',
+'nocrychallenge',
+'vocalists',
+'complexsystems',
+'the_scoundrealm',
+'pensacolabeer',
+'misconceptionfixer',
+'originalerror',
+'wrestlingpod',
+'nightshade',
+'ihscout']
+
 ### Variable Standardization
 title = title.reset_index()
 
@@ -250,7 +277,7 @@ eigenValues = pca2.explained_variance_ratio_
 
 pca_transformed_features = pd.DataFrame(pca2.fit_transform(title[f_features]))
 pca_transformed_features.columns = ['PC_' + str(i + 1) for i in range(len(f_features))]
-
+pca2_components.columns = ['PC_' + str(i + 1) for i in range(pca2_components.shape[1])]
 ### CHANGE THIS IF DATA IS SAMPLED
 pc_to_remove = ['PC_13','PC_14']
 pca_transformed_features = pca_transformed_features.drop(pc_to_remove, axis = 1)
@@ -275,6 +302,9 @@ lda = LatentDirichletAllocation(n_components=10, random_state=0, n_jobs=-1).fit(
 lda_fit_transform = lda.fit_transform(title[f_features])
 
 ### k-means - # Optimal Clusters = 7 (SSE Threshold = 11,000)
+
+#title_sample = title.sample(10000, random_state = 3).append(title[title['SOURCE_SUBREDDIT'].isin(labelled_pts)]).drop_duplicates()
+
 sse = {}
 for k in range(1, 10):
     kmeans = KMeans(n_clusters=k, max_iter=1000, random_state=0, n_jobs=-1, init = 'k-means++').fit(title[f_features])
@@ -286,9 +316,11 @@ plt.xlabel("Number of cluster")
 plt.ylabel("SSE")
 plt.show()
 
-num_clusters = 6
+num_clusters = 7
 ### Initial Clustering with full dataset = 7, after reducing rows based on quantiles = 6
 kmeans_final = KMeans(n_clusters=num_clusters, max_iter=1000, random_state=0, n_jobs=-1, init = 'k-means++').fit(title[f_features])
+
+check = title[['SOURCE_SUBREDDIT','kmeans_clusters_'+str(num_clusters)]][title['SOURCE_SUBREDDIT'].isin(labelled_pts)].drop_duplicates()
 
 dict_cluster_results = {}
 for c in title['kmeans_clusters_'+str(num_clusters)].unique().tolist():
@@ -298,10 +330,9 @@ for c in title['kmeans_clusters_'+str(num_clusters)].unique().tolist():
 cluster_scores(title,'kmeans_clusters_'+str(num_clusters))
 
 ### SPECTRAL CLUSTERING - ONLY ON SAMPLED DATA
-title_sample = title.sample(10000, random_state = 3)
-sc = SpectralClustering(n_jobs=-1, random_state=0).fit(title_sample[f_features])
-title_sample['sc_clusters'] = sc.labels_
-cluster_scores(title_sample,'sc_clusters')
+sc = SpectralClustering(n_jobs=-1, random_state=0).fit(title[f_features])
+title['sc_clusters'] = sc.labels_
+cluster_scores(title,'sc_clusters')
 
 ### GMM
 gmm = GaussianMixture(n_components = num_clusters, covariance_type = 'spherical',random_state= 0).fit(title[f_features])
@@ -318,29 +349,43 @@ cluster_scores(title,'gmm_clusters')
 ### Hierarchical Clustering
 
 for i in [2,3,4,5,6,7,8,9,10]:
-    hac = AgglomerativeClustering(n_clusters=i, affinity='euclidean', linkage='average').fit(title_sample[f_features])
-    title_sample['hac_clusters'] = hac.labels_
+    hac = AgglomerativeClustering(n_clusters=i, affinity='euclidean', linkage='average').fit(title[f_features])
+    title['hac_clusters'] = hac.labels_
     print(i)
-    cluster_scores(title_sample,'hac_clusters')
+    cluster_scores(title,'hac_clusters')
     print('\n')
 
 # DENDROGRAM
-linked = linkage(title_sample[f_features],'average')
-labelList = range(title_sample.shape[0])
+linked = linkage(title[f_features],'average')
+labelList = range(title.shape[0])
 
-plt.figure(figsize=(10,7))
+plt.figure(figsize=(100,70))
 dendrogram(linked, orientation = 'top', labels = labelList, distance_sort='descending',
            show_leaf_counts=True)
+plt.ylim(0.6,1)
+plt.xlim(0,np.round(title.shape[0]/10))
 plt.show()
 
-hac = AgglomerativeClustering(n_clusters=5, affinity='euclidean', linkage='average').fit(title_sample[f_features])
-title_sample['hac_clusters'] = hac.labels_
+hac = AgglomerativeClustering(n_clusters=5, affinity='euclidean', linkage='average').fit(title[f_features])
+title['hac_clusters'] = hac.labels_
 
 dict_hac_results = {}
-for c in title_sample['hac_clusters'].unique().tolist():
-    dict_hac_results[c] = title_sample[title_sample['hac_clusters'] == c][f_features].describe().T
+for c in title['hac_clusters'].unique().tolist():
+    dict_hac_results[c] = title[title['hac_clusters'] == c][f_features].describe().T
 
+joblib.dump(hac, 'Hierarchical_Model.pkl')
 
+cluster_to_subreddit = {}
+for c in title['hac_clusters'].unique():
+    cluster_to_subreddit[c] = list(title[title['hac_clusters'] == c]['SOURCE_SUBREDDIT'].unique())
 
+for c in title['hac_clusters'].unique():
+    title.loc[title['TARGET_SUBREDDIT'].isin(cluster_to_subreddit[c]), 'hac_cluster_target'] = c
+    
+title = title[~title['hac_cluster_target'].isnull()]
+    
 
-
+    
+    
+    
+    
