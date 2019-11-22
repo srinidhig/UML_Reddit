@@ -383,9 +383,12 @@ for c in title['hac_clusters'].unique():
     title.loc[title['TARGET_SUBREDDIT'].isin(cluster_to_subreddit[c]), 'hac_cluster_target'] = c
     
 title = title[~title['hac_cluster_target'].isnull()]
-    
 
-    
+### Anomaly Detection using SVD
+f_features = ['LIWC_Swear','LIWC_Social','LIWC_Neg_New','LIWC_Posemo','LIWC_Percept',
+              'LIWC_Bio','LIWC_Relativ','LIWC_Work','LIWC_Achiev','LIWC_Leisure',
+              'LIWC_Home','LIWC_Money','LIWC_Relig','LIWC_Death']
+u, s, v = np.linalg.svd(title[f_features])
     
     
     
