@@ -16,6 +16,7 @@ from sklearn.decomposition import FactorAnalysis
 from sklearn.decomposition import TruncatedSVD
 from sklearn.utils.extmath import randomized_svd
 from sklearn.manifold import TSNE
+import umap
 from sklearn.decomposition import LatentDirichletAllocation
 from sklearn.cluster import KMeans
 from sklearn.cluster import SpectralClustering
@@ -35,14 +36,16 @@ title = DataFrame.from_csv("Reddit_Title.tsv", sep="\t")
 title = title.reset_index()
 
 ### DATA PREPARATION
+sr_once = title.SOURCE_SUBREDDIT.value_counts()[title.SOURCE_SUBREDDIT.value_counts() == 1].index.tolist()
+title = title[title.SOURCE_SUBREDDIT.isin(sr_once)]
+
+title = title.sample(10000, random_state = 3)
+
 target_sr = title[~title.TARGET_SUBREDDIT.isin(title.SOURCE_SUBREDDIT)]
 target_sr['SOURCE_SUBREDDIT'] = target_sr['TARGET_SUBREDDIT']
 target_sr['TARGET_SUBREDDIT'] = '-'
 title = title.append(target_sr)
 del target_sr
-
-sr_once = title.SOURCE_SUBREDDIT.value_counts()[title.SOURCE_SUBREDDIT.value_counts() == 1].index.tolist()
-title = title[title.SOURCE_SUBREDDIT.isin(sr_once)]
 
 properties_df = title.PROPERTIES.str.split(',', expand = True)
 properties_df.columns = ['Num_char',
@@ -196,7 +199,7 @@ cat_features_df = pd.get_dummies(title[cat_features])
 
 title = title.join(cat_features_df)
 
-for f in features:
+for f in f_features:
     #Standardization
     title[f] = (title[f] - title[f].min())/(title[f].max() - title[f].min())
     #Normalization
@@ -298,12 +301,13 @@ for i in [1,2,3,4,5,6,7,8,9,10,15,20,25,30,50,100]:
     print(i)
 '''
     
-lda = LatentDirichletAllocation(n_components=10, random_state=0, n_jobs=-1).fit(title[f_features])
-lda_fit_transform = lda.fit_transform(title[f_features])
+#lda = LatentDirichletAllocation(n_components=10, random_state=0, n_jobs=-1).fit(title[f_features])
+#lda_fit_transform = lda.fit_transform(title[f_features])
 
 ### k-means - # Optimal Clusters = 7 (SSE Threshold = 11,000)
 
-#title_sample = title.sample(10000, random_state = 3).append(title[title['SOURCE_SUBREDDIT'].isin(labelled_pts)]).drop_duplicates()
+title_sample = title.sample(10000, random_state = 3)
+#.append(title[title['SOURCE_SUBREDDIT'].isin(labelled_pts)]).drop_duplicates()
 
 sse = {}
 for k in range(1, 10):
@@ -316,18 +320,18 @@ plt.xlabel("Number of cluster")
 plt.ylabel("SSE")
 plt.show()
 
-num_clusters = 7
+num_clusters = 6
 ### Initial Clustering with full dataset = 7, after reducing rows based on quantiles = 6
-kmeans_final = KMeans(n_clusters=num_clusters, max_iter=1000, random_state=0, n_jobs=-1, init = 'k-means++').fit(title[f_features])
+kmeans_final = KMeans(n_clusters=num_clusters, max_iter=1000, random_state=0, n_jobs=-1, init = 'k-means++').fit(title_sample[f_features])
 
-check = title[['SOURCE_SUBREDDIT','kmeans_clusters_'+str(num_clusters)]][title['SOURCE_SUBREDDIT'].isin(labelled_pts)].drop_duplicates()
+#check = title_sample[['SOURCE_SUBREDDIT','kmeans_clusters_'+str(num_clusters)]][title_sample['SOURCE_SUBREDDIT'].isin(labelled_pts)].drop_duplicates()
 
 dict_cluster_results = {}
 for c in title['kmeans_clusters_'+str(num_clusters)].unique().tolist():
     dict_cluster_results[c] = title[title['kmeans_clusters_'+str(num_clusters)] == c][f_features].describe().T
 
 ### Evaluating k-means
-cluster_scores(title,'kmeans_clusters_'+str(num_clusters))
+cluster_scores(title_sample,'kmeans_clusters_'+str(num_clusters))
 
 ### SPECTRAL CLUSTERING - ONLY ON SAMPLED DATA
 sc = SpectralClustering(n_jobs=-1, random_state=0).fit(title[f_features])
@@ -389,6 +393,75 @@ f_features = ['LIWC_Swear','LIWC_Social','LIWC_Neg_New','LIWC_Posemo','LIWC_Perc
               'LIWC_Bio','LIWC_Relativ','LIWC_Work','LIWC_Achiev','LIWC_Leisure',
               'LIWC_Home','LIWC_Money','LIWC_Relig','LIWC_Death']
 u, s, v = np.linalg.svd(title[f_features])
+
+title_2d = pd.DataFrame(u[:,:2])
+
+### SPECTRAL CLUSTERING - ON THE FIRST TWO DIMENSIONS OF U
+sc = SpectralClustering(n_jobs=-1, random_state=0, n_clusters=4).fit(title_2d)
+title_2d['sc_clusters'] = sc.labels_
+cluster_scores(title_2d,'sc_clusters')
     
+fig, ax = plt.subplots()
+ax.margins(0.05)
+groups = title_2d.groupby('sc_clusters')
+for name,group in groups:
+    ax.plot(group[0], group[1])
+
+
+### UMAP
+reducer = umap.UMAP()
+embedding = reducer.fit_transform(title_2d[[0,1]])
+print(embedding.shape)
+
+### Kmeans on UMAP data
+embedding = pd.DataFrame(embedding)
+f_features = embedding.columns.tolist()
+sse = {}
+for k in range(1, 10):
+    kmeans = KMeans(n_clusters=k, max_iter=1000, random_state=0, n_jobs=-1, init = 'k-means++').fit(embedding[f_features])
+    embedding["kmeans_clusters_"+str(k)] = kmeans.labels_
+    sse[k] = kmeans.inertia_
+plt.figure()
+plt.plot(list(sse.keys()), list(sse.values()))
+plt.xlabel("Number of cluster")
+plt.ylabel("SSE")
+plt.show()
+
+num_clusters = 5
+kmeans_final = KMeans(n_clusters=num_clusters, max_iter=1000, random_state=0, n_jobs=-1, init = 'k-means++').fit(embedding[f_features])
+cluster_scores(embedding,'kmeans_clusters_'+str(num_clusters))
+
+### INTERPRETING CLUSTERS
+f_features = ['LIWC_Swear','LIWC_Social','LIWC_Neg_New','LIWC_Posemo','LIWC_Percept',
+              'LIWC_Bio','LIWC_Relativ','LIWC_Work','LIWC_Achiev','LIWC_Leisure',
+              'LIWC_Home','LIWC_Money','LIWC_Relig','LIWC_Death']
+
+embedding_req = embedding.join(title[['SOURCE_SUBREDDIT','TARGET_SUBREDDIT','LINK_SENTIMENT'] + f_features].reset_index())
+embedding_req = embedding_req.reset_index()
+source_clusters = embedding_req[['SOURCE_SUBREDDIT','kmeans_clusters_5']].groupby('SOURCE_SUBREDDIT')['kmeans_clusters_5'].first().reset_index()
+source_clusters.columns = ['TARGET_SUBREDDIT','kmeans_clusters_5_target']
+embedding_req = embedding_req.merge(source_clusters, on = 'TARGET_SUBREDDIT', how = 'left')
+
+embedding_req = embedding_req[~embedding_req.TARGET_SUBREDDIT.isin(embedding_req[embedding_req['kmeans_clusters_5_target'].isnull()]['TARGET_SUBREDDIT'].unique().tolist())]
+
+conflicts = 1 - embedding_req.groupby(['kmeans_clusters_5','kmeans_clusters_5_target'])['LINK_SENTIMENT'].mean().reset_index()
+
+### FINALIZING RESULTS
+
+plt.scatter(embedding[0], embedding[1], c = embedding['kmeans_clusters_5'])
+plt.legend(loc = 'best')
+
+writer = pd.ExcelWriter('All_Cluster_Summaries.xlsx', engine='xlsxwriter')
+
+summaries = {}
+for i in embedding_req.kmeans_clusters_5.unique():
+    summaries[i] = embedding_req[embedding_req['kmeans_clusters_5'] == i].describe().T
+    summaries[i].to_excel(writer, sheet_name='Sheet' + str(i))
     
-    
+writer.save()
+
+total_summary = embedding_req.describe().T
+total_summary.to_excel('Feature_Distributions.xlsx')
+
+
+
